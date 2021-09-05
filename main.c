@@ -19,13 +19,15 @@ SDL_Texture *interior_tex = NULL;
 SDL_Texture *font_tex = NULL;
 SDL_Texture *control_tex = NULL;
 SDL_Texture *ui_tex = NULL;
+SDL_Texture *computer_tex = NULL;
 
 const Uint8 *keyboard_state;
 
 SDL_Texture *load_texture(const char *filename) {
 	SDL_Surface *loaded_surface = IMG_Load(filename);
 	assert(loaded_surface);
-	SDL_Texture *new_texture = SDL_CreateTextureFromSurface(renderer, loaded_surface);
+	SDL_Texture *new_texture = SDL_CreateTextureFromSurface(
+			renderer, loaded_surface);
 	SDL_FreeSurface(loaded_surface);
 	assert(new_texture);
 	return new_texture;
@@ -52,6 +54,7 @@ void init_sdl() {
 	font_tex = load_texture("img/font.png");
 	control_tex = load_texture("img/controls.png");
 	ui_tex = load_texture("img/ui.png");
+	computer_tex = load_texture("img/computer.png");
 
 	keyboard_state = SDL_GetKeyboardState(NULL);
 	SDL_ShowCursor(SDL_DISABLE);
@@ -60,6 +63,7 @@ void init_sdl() {
 void end_sdl() {
 	SDL_ShowCursor(SDL_ENABLE);
 
+	SDL_DestroyTexture(computer_tex);
 	SDL_DestroyTexture(ui_tex);
 	SDL_DestroyTexture(control_tex);
 	SDL_DestroyTexture(font_tex);
@@ -72,6 +76,15 @@ void end_sdl() {
 	SDL_DestroyRenderer(renderer);
 	SDL_DestroyWindow(window);
 	SDL_Quit();
+}
+
+void toggle_fullscreen() {
+	int flags = SDL_GetWindowFlags(window);
+	if((flags & SDL_WINDOW_SHOWN) == SDL_WINDOW_SHOWN)
+		flags = SDL_WINDOW_FULLSCREEN_DESKTOP;
+	else
+		flags = SDL_WINDOW_SHOWN;
+	SDL_SetWindowFullscreen(window, flags);
 }
 
 /* map */
@@ -132,14 +145,26 @@ draw:
 		}
 }
 
+int *tile_at(struct map *map, int mx, int my) {
+	for(int x = 0; x < map->w; x++)
+		for(int y = 0; y < map->h; y++)
+			if(mx > x*TILE_SIZE && my > y*TILE_SIZE
+					&& mx < x*TILE_SIZE+TILE_SIZE
+					&& my < y*TILE_SIZE+TILE_SIZE)
+				return &map->map[y*map->w+x];
+	return NULL;
+}
+
 /* game globals */
 
 struct map *ship;
 struct naut *player;
 enum {
 	STATE_INTERIOR,
+	STATE_COMPUTER_ANIMATION,
 	STATE_SHIP_COMPUTER,
 } state;
+int computer_starttime;
 
 /* naut */
 
@@ -283,7 +308,7 @@ void update_naut(struct naut *naut) {
 	}
 	else {
 		naut->ts = 0;
-		if(state != STATE_SHIP_COMPUTER)
+		if(state == STATE_INTERIOR)
 			naut->ta = naut->a;
 	}
 
@@ -383,19 +408,21 @@ void draw_mouse(int xo, int yo) {
 	SDL_Rect src, dst;
 	src.x = 0;
 
-	int tx, ty;
+	if(state == STATE_COMPUTER_ANIMATION)
+		goto draw;
+
 	if(state == STATE_SHIP_COMPUTER)
 		goto draw;
 
-	tx = mx/TILE_SIZE + xo/TILE_SIZE;
-	ty = (my-TILE_SIZE/2)/TILE_SIZE + yo/TILE_SIZE;
-
-	if(tx < 0 || ty < 0 || tx >= player->map->w || ty >= player->map->h)
+	int *t = tile_at(player->map, mx+xo, my+yo);
+	if(t == NULL)
 		goto draw;
 
-	int t = player->map->map[ty*player->map->w+tx];
+	int tx = (t-player->map->map) % player->map->w;
+	int ty = (t-player->map->map) / player->map->w;
+
 	char str[30];
-	if(t == 17)
+	if(*t == 17)
 		sprintf(str, "Use Computer");
 	else
 		goto draw;
@@ -427,30 +454,30 @@ void click() {
 	int w, h;
 	SDL_GetWindowSize(window, &w, &h);
 
-	int xo = ship->w*TILE_SIZE/2 - w/2;
-	int yo = ship->h*TILE_SIZE/2 - h/2;
+	int xo = player->map->w*TILE_SIZE/2 - w/2;
+	int yo = player->map->h*TILE_SIZE/2 - h/2;
 
 	int mx, my;
 	SDL_GetMouseState(&mx, &my);
 
-	int tx, ty;
+	int tx, ty, *t;
 
 	switch(state) {
 	case STATE_INTERIOR:
-		tx = mx/TILE_SIZE + xo/TILE_SIZE;
-		ty = (my-TILE_SIZE/2)/TILE_SIZE + yo/TILE_SIZE;
-
-		if(tx < 0 || ty < 0)
-			break;
-		if(tx >= player->map->w || ty >= player->map->h)
+		t = tile_at(player->map, mx+xo, my+yo);
+		if(t == NULL)
 			break;
 
-		int t = player->map->map[ty*player->map->w+tx];
-		if(t == 17) {
-			if(pow(tx+0.5-player->x,2)+pow(ty+0.5-player->y,2) > NAUT_RANGE)
+		tx = (t-player->map->map) % player->map->w;
+		ty = (t-player->map->map) / player->map->w;
+
+		if(*t == 17) {
+			if(pow(tx+0.5-player->x,2)+pow(ty+0.5-player->y,2)
+					> NAUT_RANGE)
 				break;
-			state = STATE_SHIP_COMPUTER;
+			state = STATE_COMPUTER_ANIMATION;
 			player->ta = atan2(ty-player->y, tx-player->x) + PI/2;
+			computer_starttime = SDL_GetTicks();
 			break;
 		}
 
@@ -458,13 +485,25 @@ void click() {
 
 	case STATE_SHIP_COMPUTER:
 		break;
+	
+	default:
+		break;
 	}
 }
 
 
 /* computer */
 
-void draw_computer() {
+void draw_computer_animation() {
+	int frame = SDL_GetTicks() - computer_starttime;
+	int w, h;
+	SDL_GetWindowSize(window, &w, &h);
+	SDL_Rect dst;
+	dst.h = h - 32 + frame*5;
+	dst.w = dst.h;
+	dst.x = w/2 - dst.w/2;
+	dst.y = h - dst.h + frame*1.5;
+	SDL_RenderCopy(renderer, computer_tex, NULL, &dst);
 }
 
 /* game */
@@ -491,20 +530,22 @@ void draw() {
 	int w, h;
 	SDL_GetWindowSize(window, &w, &h);
 
-	int xo = ship->w*TILE_SIZE/2 - w/2;
-	int yo = ship->h*TILE_SIZE/2 - h/2;
+	int xo = player->map->w*TILE_SIZE/2 - w/2;
+	int yo = player->map->h*TILE_SIZE/2 - h/2;
 
 	SDL_RenderClear(renderer);
-	draw_map(ship, xo, yo);
-	draw_nauts(xo, yo);
 
 	switch(state) {
 	case STATE_INTERIOR:
+		draw_map(player->map, xo, yo);
+		draw_nauts(xo, yo);
 		draw_header("Ship Interior");
+		break;
+	case STATE_COMPUTER_ANIMATION:
+		draw_computer_animation();
 		break;
 	case STATE_SHIP_COMPUTER:
 		draw_header("Galaxy");
-		draw_computer();
 		break;
 	}
 
@@ -515,6 +556,9 @@ void draw() {
 void update() {
 	if(state == STATE_INTERIOR)
 		control_naut(player);
+	if(state == STATE_COMPUTER_ANIMATION)
+		if(SDL_GetTicks() - computer_starttime > 500)
+			state = STATE_SHIP_COMPUTER;
 	update_nauts();
 }
 
@@ -532,6 +576,18 @@ void main_loop() {
 				switch(event.button.button) {
 				case SDL_BUTTON_LEFT:
 					click();
+					break;
+				}
+				break;
+			case SDL_KEYDOWN:
+				switch(event.key.keysym.sym) {
+				case SDLK_RETURN:
+					if(keyboard_state[SDL_SCANCODE_LALT])
+						toggle_fullscreen();
+					break;
+				case SDLK_ESCAPE:
+					if(state == STATE_SHIP_COMPUTER)
+						state = STATE_INTERIOR;
 					break;
 				}
 				break;
