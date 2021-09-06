@@ -155,9 +155,58 @@ int *tile_at(struct map *map, int mx, int my) {
 	return NULL;
 }
 
+/* galaxy */
+
+int galaxy_w, galaxy_h;
+
+void init_galaxy(int w, int h) {
+	galaxy_w = w;
+	galaxy_h = h;
+}
+
+/* ship */
+
+struct ship {
+	float x, y, a;
+	float xv, yv, av;
+	float acc, a_acc;
+	struct map *map;
+};
+
+struct ship *ships[200] = {NULL};
+
+struct ship *new_ship(float x, float y) {
+	struct ship *ship = malloc(sizeof(struct ship));
+	ship->x = x;
+	ship->y = y;
+	ship->a = PI;
+	ship->xv = 0;
+	ship->yv = 0;
+	ship->av = 0;
+	ship->acc = 0;
+	ship->a_acc = 0;
+	ship->map = load_map("lvl/ship.lvl");
+
+	int i;
+	for(i = 0; ships[i]; i++);
+	ships[i] = ship;
+
+	return ship;
+}
+
+void free_ship(struct ship *ship) {
+	int i, j;
+	for(i = 0; ships[i+1]; i++);
+	for(j = 0; ships[j] != ship; j++);
+	ships[j] = ships[i];
+
+	free_map(ship->map);
+	free(ship);
+}
+
 /* game globals */
 
-struct map *ship;
+struct ship *ship;
 struct naut *player;
 enum {
 	STATE_INTERIOR,
@@ -506,14 +555,79 @@ void draw_computer_animation() {
 	SDL_RenderCopy(renderer, computer_tex, NULL, &dst);
 }
 
+void draw_spacemap(int xo, int yo) {
+	for(int i = 0; ships[i]; i++) {
+		SDL_Rect src, dst;
+		src.x = 0;
+		src.y = 0;
+		src.w = 8;
+		src.h = 8;
+		dst.w = 32;
+		dst.h = 32;
+		dst.x = dst.w * ships[i]->x - xo;
+		dst.y = dst.h * ships[i]->y - yo;
+		float a = (ships[i]->a/180.0)*PI;
+		SDL_Point p;
+		p.x = dst.w/2;
+		p.y = dst.h/2;
+		SDL_RendererFlip f = SDL_FLIP_NONE;
+		SDL_RenderCopyEx(renderer, spacemap_tex, &src, &dst, a, &p, f);
+	}
+}
+
+void draw_controls() {
+	int w, h;
+	SDL_GetWindowSize(window, &w, &h);
+
+	int sz = 6;
+	if(w*h > 1024*768)
+		sz = 8;
+
+	SDL_Rect src, dst;
+	src.x = 32;
+	src.y = 24;
+	src.w = 32;
+	src.h = 8;
+	dst.w = 32*sz;
+	dst.h = 8*sz;
+	dst.x = sz*2;
+	dst.y = h - dst.h - sz*2;
+	SDL_RenderCopy(renderer, control_tex, &src, &dst);
+
+	src.x = 40;
+	src.y = 16;
+	src.w = 8;
+	src.h = 8;
+	dst.w = 8*sz;
+	dst.h = 8*sz;
+	dst.x = dst.x + 16*sz - dst.w/2 + ship->a_acc*sz;
+	SDL_RenderCopy(renderer, control_tex, &src, &dst);
+
+	src.x = 56;
+	src.y = 32;
+	src.h = 32;
+	dst.h = 32*sz;
+	dst.y = h - sz*2 - dst.h;
+	dst.x = w - sz*2 - dst.w;
+	SDL_RenderCopy(renderer, control_tex, &src, &dst);
+
+	src.x = 32;
+	src.y = 16;
+	src.w = 8;
+	src.h = 8;
+	dst.h = src.w*sz;
+	dst.y = h - sz*2 - ship->acc*sz - 4*sz;
+	SDL_RenderCopy(renderer, control_tex, &src, &dst);
+}
+
 /* game */
 
 void init_game() {
-	ship = load_map("lvl/ship.lvl");
-	player = new_naut(ship, 0, 0);
-	for(int x = 0; x < ship->w; x++)
-		for(int y = 0; y < ship->h; y++) {
-			if(ship->map[y*ship->w+x] != 7)
+	ship = new_ship(1.5, 1.5);
+	player = new_naut(ship->map, 0, 0);
+	for(int x = 0; x < ship->map->w; x++)
+		for(int y = 0; y < ship->map->h; y++) {
+			if(ship->map->map[y*ship->map->w+x] != 7)
 				continue;
 			player->x = x;
 			player->y = y;
@@ -522,7 +636,7 @@ void init_game() {
 }
 
 void end_game() {
-	free_map(ship);
+	free_ship(ship);
 	free(player);
 }
 
@@ -545,7 +659,9 @@ void draw() {
 		draw_computer_animation();
 		break;
 	case STATE_SHIP_COMPUTER:
+		draw_spacemap(0, 0);
 		draw_header("Galaxy");
+		draw_controls();
 		break;
 	}
 
