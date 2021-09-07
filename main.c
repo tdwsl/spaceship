@@ -169,7 +169,7 @@ void init_galaxy(int w, int h) {
 struct ship {
 	float x, y, a;
 	float xv, yv, av;
-	float acc, a_acc;
+	float acc, vel;
 	struct map *map;
 };
 
@@ -184,7 +184,7 @@ struct ship *new_ship(float x, float y) {
 	ship->yv = 0;
 	ship->av = 0;
 	ship->acc = 0;
-	ship->a_acc = 0;
+	ship->vel = 0;
 	ship->map = load_map("lvl/ship.lvl");
 
 	int i;
@@ -202,6 +202,85 @@ void free_ship(struct ship *ship) {
 
 	free_map(ship->map);
 	free(ship);
+}
+
+void update_ship(struct ship *ship) {
+	if(ship->vel < ship->acc/200.0)
+		ship->vel += 0.01;
+	if(ship->vel > 0)
+		ship->vel -= 0.001;
+	if(ship->vel < 0)
+		ship->vel += 0.001;
+	if(fabs(ship->vel) < 0.005)
+		ship->vel = 0;
+
+	ship->a += (ship->av/30.0)*ship->vel;
+
+	if(ship->vel > 0) {
+		float xv = cosf(ship->a)*ship->vel;
+		float yv = sinf(ship->a)*ship->vel;
+		if(ship->xv < xv)
+			ship->xv += 0.01;
+		else if(ship->xv > xv)
+			ship->xv -= 0.01;
+		if(ship->yv < yv)
+			ship->yv += 0.01;
+		else if(ship->yv > yv)
+			ship->yv -= 0.01;
+	}
+
+	if(ship->xv < 0)
+		ship->xv += 0.001;
+	if(ship->yv < 0)
+		ship->yv += 0.001;
+	if(ship->xv > 0)
+		ship->xv -= 0.001;
+	if(ship->yv > 0)
+		ship->yv -= 0.001;
+
+	if(fabs(ship->xv) < 0.005)
+		ship->xv = 0;
+	if(fabs(ship->yv) < 0.005)
+		ship->yv = 0;
+
+	ship->x += ship->xv;
+	ship->y += ship->yv;
+
+	if(ship->x < 0)
+		ship->xv = 0.2;
+	if(ship->y < 0)
+		ship->yv = 0.2;
+	int w, h;
+	SDL_GetWindowSize(window, &w, &h);
+	if(ship->x > w/32-1)//galaxy_w)
+		ship->xv = -0.2;
+	if(ship->y > h/32-1)//galaxy_h)
+		ship->yv = -0.2;
+}
+
+void update_ships() {
+	for(int i = 0; ships[i]; i++)
+		update_ship(ships[i]);
+}
+
+void control_ship(struct ship *ship) {
+	int x = 0, y = 0;
+	if(keyboard_state[SDL_SCANCODE_W]||keyboard_state[SDL_SCANCODE_UP])
+		y = -1;
+	if(keyboard_state[SDL_SCANCODE_S]||keyboard_state[SDL_SCANCODE_DOWN])
+		y = 1;
+	if(keyboard_state[SDL_SCANCODE_A]||keyboard_state[SDL_SCANCODE_LEFT])
+		x = -1;
+	if(keyboard_state[SDL_SCANCODE_D]||keyboard_state[SDL_SCANCODE_RIGHT])
+		x = 1;
+
+	ship->av += x;
+	if(fabs(ship->av) > 16)
+		ship->av -= x;
+
+	ship->acc -= y;
+	if(ship->acc < 0 || ship->acc > 32)
+		ship->acc += y;
 }
 
 /* game globals */
@@ -257,7 +336,7 @@ void draw_naut(struct naut *naut, int xo, int yo) {
 	if(naut->s < -0.1)
 		flip = SDL_FLIP_HORIZONTAL;
 
-	float a = (naut->a/PI)*180;
+	float a = (naut->a/PI)*180+90;
 
 	SDL_Rect src, dst;
 	if(fabs(naut->s) > 0.8)
@@ -333,7 +412,7 @@ void control_naut(struct naut *naut) {
 	if(keyboard_state[SDL_SCANCODE_D]||keyboard_state[SDL_SCANCODE_RIGHT])
 		x = 1;
 	if(x != 0 || y != 0) {
-		naut->ta = atan2(y, x) + PI/2;
+		naut->ta = atan2(y, x);
 		if(naut->ta < 0)
 			naut->ta += PI*2;
 		if(naut->ta >= PI*2)
@@ -499,6 +578,8 @@ draw:
 	SDL_SetTextureAlphaMod(font_tex, 0xff);
 }
 
+void click_computer();
+
 void click() {
 	int w, h;
 	SDL_GetWindowSize(window, &w, &h);
@@ -533,6 +614,7 @@ void click() {
 		break;
 
 	case STATE_SHIP_COMPUTER:
+		click_computer();
 		break;
 	
 	default:
@@ -566,7 +648,7 @@ void draw_spacemap(int xo, int yo) {
 		dst.h = 32;
 		dst.x = dst.w * ships[i]->x - xo;
 		dst.y = dst.h * ships[i]->y - yo;
-		float a = (ships[i]->a/180.0)*PI;
+		float a = (ships[i]->a/PI)*180+90;
 		SDL_Point p;
 		p.x = dst.w/2;
 		p.y = dst.h/2;
@@ -600,7 +682,7 @@ void draw_controls() {
 	src.h = 8;
 	dst.w = 8*sz;
 	dst.h = 8*sz;
-	dst.x = dst.x + 16*sz - dst.w/2 + ship->a_acc*sz;
+	dst.x = dst.x + 16*sz - dst.w/2 + ship->av*sz;
 	SDL_RenderCopy(renderer, control_tex, &src, &dst);
 
 	src.x = 56;
@@ -620,6 +702,30 @@ void draw_controls() {
 	SDL_RenderCopy(renderer, control_tex, &src, &dst);
 }
 
+void click_computer() {
+	int w, h;
+	SDL_GetWindowSize(window, &w, &h);
+	int mx, my;
+	SDL_GetMouseState(&mx, &my);
+
+	int sz = 6;
+	if(w*h > 1024*768)
+		sz = 8;
+
+	if(mx > sz*2 && my > h-sz*2-8*sz && mx < sz*2+32*sz && my < h-sz*2) {
+		ship->av = (mx-sz*2-16*sz)/sz;
+		if(fabs(ship->av) < 2)
+			ship->av = 0;
+	}
+
+	if(mx > w-sz*2-8*sz && my > h-sz*2-32*sz
+			&& mx < w-sz*2 && my < h-sz*2) {
+		ship->acc = (h-sz*2-my)/sz;
+		if(ship->acc < 2)
+			ship->acc = 0;
+	}
+}
+
 /* game */
 
 void init_game() {
@@ -633,6 +739,7 @@ void init_game() {
 			player->y = y;
 		}
 	state = STATE_INTERIOR;
+	init_galaxy(40, 30);
 }
 
 void end_game() {
@@ -675,7 +782,10 @@ void update() {
 	if(state == STATE_COMPUTER_ANIMATION)
 		if(SDL_GetTicks() - computer_starttime > 500)
 			state = STATE_SHIP_COMPUTER;
+	if(state == STATE_SHIP_COMPUTER)
+		control_ship(ship);
 	update_nauts();
+	update_ships();
 }
 
 void main_loop() {
